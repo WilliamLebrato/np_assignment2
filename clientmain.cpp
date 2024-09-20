@@ -11,10 +11,8 @@
 #define BUFFER_SIZE 1024
 #define DEBUG
 
-
 #include "protocol.h"
 
-// ./client 13.53.76.30:5001
 // Function to perform the arithmetic operation
 int performOperation(struct calcProtocol *assignment) {
     uint32_t arith = ntohl(assignment->arith);
@@ -86,7 +84,6 @@ int main(int argc, char *argv[]) {
       printf("Host %s, and port %d.\n", Desthost, port);
     #endif
 
-
     int sockfd;
     struct addrinfo hints, *servinfo, *p;
     int rv;
@@ -100,16 +97,13 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
   
-      // Loop through all the results and create a socket
+    // Loop through all the results and create a socket
     for(p = servinfo; p != NULL; p = p->ai_next) {
         sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sockfd == -1) {
             perror("socket");
             continue;
         }
-
-        // For UDP, you typically don't need to bind the socket unless you have specific requirements
-        // printf("Socket created successfully.\n");
         break;
     }
 
@@ -119,9 +113,18 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    freeaddrinfo(servinfo); // No longer needed after socket creation
+    // Set receive timeout
+    struct timeval timeout;
+    timeout.tv_sec = 2; // 2 seconds timeout
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-      // Construct the initial calcMessage
+    ssize_t sent_bytes;
+    int attempts = 0;
+    socklen_t server_len = p->ai_addrlen; // Use the length from getaddrinfo()
+    struct calcProtocol response;
+
+    // Construct the initial calcMessage
     struct calcMessage message;
     message.type = htons(22);
     message.message = htonl(0);
@@ -129,27 +132,9 @@ int main(int argc, char *argv[]) {
     message.major_version = htons(1);
     message.minor_version = htons(0);
 
-    // Send the message to the server
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    inet_pton(AF_INET, Desthost, &server_addr.sin_addr);
-
-    // Set receive timeout
-    struct timeval timeout;
-    timeout.tv_sec = 2; // 2 seconds timeout
-    timeout.tv_usec = 0;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  
-    ssize_t sent_bytes;
-    int attempts = 0;
-    socklen_t server_len = sizeof(server_addr);
-    struct calcProtocol response;
-
     while (attempts < 3) {
         // Send the message to the server
-        sent_bytes = sendto(sockfd, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, server_len);
+        sent_bytes = sendto(sockfd, &message, sizeof(message), 0, p->ai_addr, p->ai_addrlen);
         if (sent_bytes == -1) {
             perror("sendto");
             close(sockfd);
@@ -158,7 +143,9 @@ int main(int argc, char *argv[]) {
         printf("Message sent, attempt %d.\n", attempts + 1);
 
         // Wait for the response
-        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&server_addr, &server_len);
+        struct sockaddr_storage from_addr;
+        socklen_t from_len = sizeof(from_addr);
+        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&from_addr, &from_len);
 
         if (recv_bytes == -1) {
             // Check if the error is due to timeout
@@ -191,18 +178,6 @@ int main(int argc, char *argv[]) {
 
     printf("OK\n");
     struct calcProtocol *protocolResponse = (struct calcProtocol *)&response;
-    /*
-    printf("Received calculation assignment:\n");
-    printf("Type: %d\n", ntohs(protocolResponse->type));
-    printf("Major Version: %d\n", ntohs(protocolResponse->major_version));
-    printf("Minor Version: %d\n", ntohs(protocolResponse->minor_version));
-    printf("ID: %d\n", ntohl(protocolResponse->id));
-    printf("Arithmetic Operation: %d\n", ntohl(protocolResponse->arith));
-    printf("Integer Value 1: %d\n", ntohl(protocolResponse->inValue1));
-    printf("Integer Value 2: %d\n", ntohl(protocolResponse->inValue2));
-    printf("Floating Point Value 1: %f\n", protocolResponse->flValue1);
-    printf("Floating Point Value 2: %f\n", protocolResponse->flValue2);
-    */
 
     // Perform the arithmetic operation
     if (performOperation(protocolResponse) == -1) {
@@ -210,10 +185,12 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+    protocolResponse->type = htons(2); // Set the type to client-to-server
+
     attempts = 0;
     while (attempts < 3) {
         // Send the response back to the server
-        ssize_t sent_bytes = sendto(sockfd, protocolResponse, sizeof(*protocolResponse), 0, (struct sockaddr *)&server_addr, server_len);
+        ssize_t sent_bytes = sendto(sockfd, protocolResponse, sizeof(*protocolResponse), 0, p->ai_addr, p->ai_addrlen);
         if (sent_bytes == -1) {
             perror("sendto");
             close(sockfd);
@@ -222,7 +199,9 @@ int main(int argc, char *argv[]) {
         printf("Response sent, attempt %d.\n", attempts + 1);
 
         // Wait for the response
-        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&server_addr, &server_len);
+        struct sockaddr_storage from_addr;
+        socklen_t from_len = sizeof(from_addr);
+        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&from_addr, &from_len);
 
         if (recv_bytes == -1) {
             // Check if the error is due to timeout
@@ -237,6 +216,12 @@ int main(int argc, char *argv[]) {
             }
         }
         break;
+    }
+
+    if (attempts == 3) {
+        printf("Server did not respond after 3 attempts. Terminating.\n");
+        close(sockfd);
+        return 0;
     }
 
     close(sockfd);
