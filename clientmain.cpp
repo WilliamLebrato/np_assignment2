@@ -16,28 +16,6 @@
 
 // client 127.0.0.1:5000
 
-typedef struct calcMessage {
-    uint16_t type;
-    uint32_t message;
-    uint16_t protocol;
-    uint16_t major_version;
-    uint16_t minor_version;
-} calcMessage;
-
-typedef struct calcProtocol {
-    uint16_t type;
-    uint16_t major_version;
-    uint16_t minor_version;
-    uint32_t id;
-    uint32_t arith;
-    int32_t inValue1;
-    int32_t inValue2;
-    int32_t inResult;
-    double flValue1;
-    double flValue2;
-    double flResult;
-} calcProtocol;
-
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <IP:PORT>\n", argv[0]);
@@ -126,7 +104,7 @@ int main(int argc, char *argv[]) {
         if (sent_bytes == -1) {
             perror("sendto");
             close(sockfd);
-            exit(EXIT_FAILURE);
+            return -1;
         }
         printf("Message sent, attempt %d.\n", attempts + 1);
 
@@ -142,12 +120,9 @@ int main(int argc, char *argv[]) {
             } else {
                 perror("recvfrom");
                 close(sockfd);
-                exit(EXIT_FAILURE);
+                return -1;
             }
         }
-
-        // If response received, break out of the loop
-        printf("Response received from server.\n");
         break;
     }
 
@@ -156,6 +131,28 @@ int main(int argc, char *argv[]) {
         close(sockfd);
         return 0;
     }
+
+    // Assuming `response` is a buffer where the response is stored
+    struct calcMessage *responseMessage = (struct calcMessage *)&response;
+    if (ntohs(responseMessage->type) == 2) {
+        printf("NOT OK\n");
+        close(sockfd);
+        return -1;
+    }
+
+    printf("OK\n");
+    struct calcProtocol *protocolResponse = (struct calcProtocol *)&response;
+
+    printf("Received calculation assignment:\n");
+    printf("Type: %d\n", ntohs(protocolResponse->type));
+    printf("Major Version: %d\n", ntohs(protocolResponse->major_version));
+    printf("Minor Version: %d\n", ntohs(protocolResponse->minor_version));
+    printf("ID: %d\n", ntohl(protocolResponse->id));
+    printf("Arithmetic Operation: %d\n", ntohl(protocolResponse->arith));
+    printf("Integer Value 1: %d\n", ntohl(protocolResponse->inValue1));
+    printf("Integer Value 2: %d\n", ntohl(protocolResponse->inValue2));
+    printf("Floating Point Value 1: %f\n", protocolResponse->flValue1);
+    printf("Floating Point Value 2: %f\n", protocolResponse->flValue2);
     close(sockfd);
     
     return 0;
