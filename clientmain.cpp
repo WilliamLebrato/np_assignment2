@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <sys/time.h> // For timeout handling
-
+#include <errno.h>
 #define BUFFER_SIZE 1024
 #define DEBUG
 
@@ -23,6 +23,20 @@ typedef struct calcMessage {
     uint16_t major_version;
     uint16_t minor_version;
 } calcMessage;
+
+typedef struct calcProtocol {
+    uint16_t type;
+    uint16_t major_version;
+    uint16_t minor_version;
+    uint32_t id;
+    uint32_t arith;
+    int32_t inValue1;
+    int32_t inValue2;
+    int32_t inResult;
+    double flValue1;
+    double flValue2;
+    double flResult;
+} calcProtocol;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -80,5 +94,69 @@ int main(int argc, char *argv[]) {
 
     freeaddrinfo(servinfo); // No longer needed after socket creation
 
+      // Construct the initial calcMessage
+    struct calcMessage message;
+    message.type = htons(22);
+    message.message = htonl(0);
+    message.protocol = htons(17);
+    message.major_version = htons(1);
+    message.minor_version = htons(0);
+
+    // Send the message to the server
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    inet_pton(AF_INET, Desthost, &server_addr.sin_addr);
+
+    // Set receive timeout
+    struct timeval timeout;
+    timeout.tv_sec = 2; // 2 seconds timeout
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  
+    ssize_t sent_bytes;
+    int attempts = 0;
+    socklen_t server_len = sizeof(server_addr);
+    struct calcProtocol response;
+
+    while (attempts < 3) {
+        // Send the message to the server
+        sent_bytes = sendto(sockfd, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, server_len);
+        if (sent_bytes == -1) {
+            perror("sendto");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+        printf("Message sent, attempt %d.\n", attempts + 1);
+
+        // Wait for the response
+        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&server_addr, &server_len);
+
+        if (recv_bytes == -1) {
+            // Check if the error is due to timeout
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("No response from server, retrying...\n");
+                attempts++;
+                continue; // Retry sending the message
+            } else {
+                perror("recvfrom");
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        // If response received, break out of the loop
+        printf("Response received from server.\n");
+        break;
+    }
+
+    if (attempts == 3) {
+        printf("Server did not respond after 3 attempts. Terminating.\n");
+        close(sockfd);
+        return 0;
+    }
+    close(sockfd);
+    
     return 0;
 }
