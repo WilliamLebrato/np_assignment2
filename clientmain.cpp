@@ -14,7 +14,56 @@
 
 #include "protocol.h"
 
-// client 127.0.0.1:5000
+// ./client 13.53.76.30:5001
+// Function to perform the arithmetic operation
+int performOperation(struct calcProtocol *assignment) {
+    uint32_t arith = ntohl(assignment->arith);
+    int32_t inVal1 = ntohl(assignment->inValue1);
+    int32_t inVal2 = ntohl(assignment->inValue2);
+    double flVal1 = assignment->flValue1;
+    double flVal2 = assignment->flValue2;
+
+    switch(arith) {
+        // Integer Operations
+        case 1: // Addition
+            assignment->inResult = htonl(inVal1 + inVal2);
+            return 0;
+        case 2: // Subtraction
+            assignment->inResult = htonl(inVal1 - inVal2);
+            return 0;
+        case 3: // Multiplication
+            assignment->inResult = htonl(inVal1 * inVal2);
+            return 0;
+        case 4: // Division
+            if (inVal2 == 0) {
+                fprintf(stderr, "Error: Division by zero.\n");
+                return -1;
+            }
+            assignment->inResult = htonl(inVal1 / inVal2);
+            return 0;
+
+        // Floating-Point Operations
+        case 5: // Floating-Point Addition
+            assignment->flResult = flVal1 + flVal2;
+            return 0;
+        case 6: // Floating-Point Subtraction
+            assignment->flResult = flVal1 - flVal2;
+            return 0;
+        case 7: // Floating-Point Multiplication
+            assignment->flResult = flVal1 * flVal2;
+            return 0;
+        case 8: // Floating-Point Division
+            if (flVal2 == 0.0) {
+                fprintf(stderr, "Error: Floating-Point Division by zero.\n");
+                return -1;
+            }
+            assignment->flResult = flVal1 / flVal2;
+            return 0;
+        default:
+            fprintf(stderr, "Unknown arithmetic operation code: %u\n", arith);
+            return -1;
+    }
+}
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -153,6 +202,23 @@ int main(int argc, char *argv[]) {
     printf("Integer Value 2: %d\n", ntohl(protocolResponse->inValue2));
     printf("Floating Point Value 1: %f\n", protocolResponse->flValue1);
     printf("Floating Point Value 2: %f\n", protocolResponse->flValue2);
+
+    // Perform the arithmetic operation
+    if (performOperation(protocolResponse) == -1) {
+        close(sockfd);
+        return -1;
+    }
+
+    // Send the result back to the server
+    ssize_t sent_bytes_result = sendto(sockfd, protocolResponse, sizeof(*protocolResponse), 0, (struct sockaddr *)&server_addr, server_len);
+    if (sent_bytes_result == -1) {
+        perror("sendto");
+        close(sockfd);
+        return -1;
+    }
+
+    printf("Result sent to server.\n");
+
     close(sockfd);
     
     return 0;
