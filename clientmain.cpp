@@ -191,7 +191,7 @@ int main(int argc, char *argv[]) {
 
     printf("OK\n");
     struct calcProtocol *protocolResponse = (struct calcProtocol *)&response;
-
+    /*
     printf("Received calculation assignment:\n");
     printf("Type: %d\n", ntohs(protocolResponse->type));
     printf("Major Version: %d\n", ntohs(protocolResponse->major_version));
@@ -202,6 +202,7 @@ int main(int argc, char *argv[]) {
     printf("Integer Value 2: %d\n", ntohl(protocolResponse->inValue2));
     printf("Floating Point Value 1: %f\n", protocolResponse->flValue1);
     printf("Floating Point Value 2: %f\n", protocolResponse->flValue2);
+    */
 
     // Perform the arithmetic operation
     if (performOperation(protocolResponse) == -1) {
@@ -209,15 +210,34 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // Send the result back to the server
-    ssize_t sent_bytes_result = sendto(sockfd, protocolResponse, sizeof(*protocolResponse), 0, (struct sockaddr *)&server_addr, server_len);
-    if (sent_bytes_result == -1) {
-        perror("sendto");
-        close(sockfd);
-        return -1;
-    }
+    attempts = 0;
+    while (attempts < 3) {
+        // Send the response back to the server
+        ssize_t sent_bytes = sendto(sockfd, protocolResponse, sizeof(*protocolResponse), 0, (struct sockaddr *)&server_addr, server_len);
+        if (sent_bytes == -1) {
+            perror("sendto");
+            close(sockfd);
+            return -1;
+        }
+        printf("Response sent, attempt %d.\n", attempts + 1);
 
-    printf("Result sent to server.\n");
+        // Wait for the response
+        ssize_t recv_bytes = recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr *)&server_addr, &server_len);
+
+        if (recv_bytes == -1) {
+            // Check if the error is due to timeout
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("No response from server, retrying...\n");
+                attempts++;
+                continue; // Retry sending the message
+            } else {
+                perror("recvfrom");
+                close(sockfd);
+                return -1;
+            }
+        }
+        break;
+    }
 
     close(sockfd);
     
