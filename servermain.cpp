@@ -9,7 +9,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <unistd.h>
 #include <math.h> // Required for floating-point comparison
 #include <time.h>
 #include <errno.h>
@@ -208,7 +207,7 @@ void handle_initial_message(char *buffer, struct sockaddr_storage *client_addr, 
 }
 
 void handle_assignment_result(char *buffer, ssize_t bytes_received, struct sockaddr_storage *client_addr, socklen_t client_addr_len, int sockfd) {
-    if (bytes_received < sizeof(struct calcProtocol)) {
+    if (bytes_received < (ssize_t)sizeof(struct calcProtocol)) {
         fprintf(stderr, "Received result message is too small to be valid.\n");
         return;
     }
@@ -270,7 +269,7 @@ void handle_assignment_result(char *buffer, ssize_t bytes_received, struct socka
 }
 
 void handle_message(char *buffer, ssize_t bytes_received, struct sockaddr_storage *client_addr, socklen_t client_addr_len,int sockfd) {
-    if (bytes_received < sizeof(struct calcMessage)) {
+    if (bytes_received < (ssize_t)sizeof(struct calcMessage)) {
         fprintf(stderr, "Received message is too small to be valid.\n");
         return;
     }
