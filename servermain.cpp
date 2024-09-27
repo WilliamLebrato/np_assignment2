@@ -153,36 +153,144 @@ void remove_client(int index) {
         clients[index].is_active = 0;
     }
 }
+
+void handle_initial_message(char *buffer, struct sockaddr_storage *client_addr, socklen_t client_addr_len, int sockfd) {
+    struct calcMessage *message = (struct calcMessage *)buffer;
+
+    // Check protocol version and type
+    if (ntohs(message->protocol) != 17 || ntohs(message->major_version) != 1 || ntohs(message->minor_version) != 0) {
+        fprintf(stderr, "Unsupported protocol version received.\n");
+        return;
+    }
+
+    // Check if client already exists
+    int client_index = find_client(client_addr, client_addr_len);
+    if (client_index != -1) {
+        // If client exists and is active, remove them
+        printf("Client already exists and is active. Removing old client.\n");
+        remove_client(client_index);
+    }
+
+    // Add the new client to the list
+    client_index = add_client(client_addr, client_addr_len);
+    if (client_index == -1) {
+        fprintf(stderr, "No space available for new client.\n");
+        return;
+    }
+
+    // Generate new assignment for the client
+    struct assignment *task = &clients[client_index].task;
+
+    // Create calcProtocol message with the assignment
+    struct calcProtocol response;
+    memset(&response, 0, sizeof(response));
+    response.type = htons(1); // Server to client message
+    response.major_version = htons(1);
+    response.minor_version = htons(0);
+    response.id = htonl(client_index);
+    response.arith = (strcmp(task->operation, "add") == 0) ? htonl(1) :
+                     (strcmp(task->operation, "sub") == 0) ? htonl(2) :
+                     (strcmp(task->operation, "mul") == 0) ? htonl(3) :
+                     (strcmp(task->operation, "div") == 0) ? htonl(4) :
+                     (strcmp(task->operation, "fadd") == 0) ? htonl(5) :
+                     (strcmp(task->operation, "fsub") == 0) ? htonl(6) :
+                     (strcmp(task->operation, "fmul") == 0) ? htonl(7) :
+                     htonl(8); // fdiv
+    response.inValue1 = htonl(task->int1);
+    response.inValue2 = htonl(task->int2);
+    response.flValue1 = task->float1;
+    response.flValue2 = task->float2;
+
+    // Send the assignment back to the client
+    if (sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr *)client_addr, client_addr_len) == -1) {
+        perror("sendto");
+    }
+}
+
+void handle_assignment_result(char *buffer, ssize_t bytes_received, struct sockaddr_storage *client_addr, socklen_t client_addr_len, int sockfd) {
+    if (bytes_received < sizeof(struct calcProtocol)) {
+        fprintf(stderr, "Received result message is too small to be valid.\n");
+        return;
+    }
+
+    // Find the client based on address
+    int client_index = find_client(client_addr, client_addr_len);
+    if (client_index == -1 || !clients[client_index].is_active) {
+        fprintf(stderr, "Client does not exist or has no active assignment.\n");
+        // Send ERROR response
+        struct calcMessage error_response;
+        error_response.type = htons(2); // Server to client message
+        error_response.message = htonl(1); // Error
+        error_response.protocol = htons(17);
+        error_response.major_version = htons(1);
+        error_response.minor_version = htons(0);
+        
+        if (sendto(sockfd, &error_response, sizeof(error_response), 0, (struct sockaddr *)client_addr, client_addr_len) == -1) {
+            perror("sendto");
+        }
+        return;
+    }
+
+    struct calcProtocol *protocol = (struct calcProtocol *)buffer;
+
+    // Check the assignment result
+    struct assignment *task = &clients[client_index].task;
+
+    // Convert the client response to a string for comparison
+    char client_response[BUFFER_SIZE];
+    if (protocol->arith >= 1 && protocol->arith <= 4) {
+        // Integer result
+        snprintf(client_response, sizeof(client_response), "%d", ntohl(protocol->inResult));
+    } else {
+        // Floating-point result
+        snprintf(client_response, sizeof(client_response), "%.4f", protocol->flResult);
+    }
+
+    // Validate the result against the task
+    const char *validation_result = check_task(task, client_response);
+
+    struct calcMessage response;
+    memset(&response, 0, sizeof(response));
+    response.type = htons(2); // Server to client message
+    response.protocol = htons(17);
+    response.major_version = htons(1);
+    response.minor_version = htons(0);
+
+    if (strcmp(validation_result, "OK\n") == 0) {
+        // Send OK response
+        response.message = htonl(0);
+    } else {
+        // Send ERROR response
+        response.message = htonl(1);
+    }
+
+    if (sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr *)client_addr, client_addr_len) == -1) {
+        perror("sendto");
+    }
+}
+
+void handle_message(char *buffer, ssize_t bytes_received, struct sockaddr_storage *client_addr, socklen_t client_addr_len,int sockfd) {
+    if (bytes_received < sizeof(struct calcMessage)) {
+        fprintf(stderr, "Received message is too small to be valid.\n");
+        return;
+    }
+
+    // Check the message type by examining the first two bytes
+    uint16_t message_type = ntohs(*(uint16_t*)buffer);
+
+    if (message_type == 22) {
+        // Handle initial calcMessage
+        handle_initial_message(buffer, client_addr, client_addr_len,sockfd);
+    } else if (message_type == 2) {
+        // Handle assignment result calcProtocol
+        handle_assignment_result(buffer, bytes_received, client_addr, client_addr_len,sockfd);
+    } else {
+        fprintf(stderr, "Unknown message type received: %d\n", message_type);
+    }
+}
 /* Needs to be global, to be rechable by callback and main */
 int loopCount=0;
 int terminate=0;
-
-void handle_message(char *buffer, ssize_t bytes_received, struct sockaddr_storage *client_addr, socklen_t client_addr_len) {
-    // Step 1: Interpret the received buffer as a calcMessage
-    struct calcMessage *msg = (struct calcMessage *)buffer;
-
-    // Step 2: Check if the message is a protocol message
-    if (ntohs(msg->type) == 22 && ntohl(msg->message) == 0) { // Protocol message type and initial message
-        // This is a protocol message, we need to send an assignment
-        printf("Received protocol message from client. Preparing assignment...\n");
-
-        // TODO: Prepare and send an assignment to the client
-
-    } 
-    // Step 3: Check if the message is an answer message
-    else if (ntohs(msg->type) == 2) { // Type 2 assumed to be answer message, adjust as per your protocol
-        // This is an answer message
-        printf("Received answer message from client. Validating answer...\n");
-  
-        // TODO: Validate the answer and respond accordingly
-
-    } 
-    // Step 4: Handle unknown message types
-    else {
-        printf("Received unknown message type from client.\n");
-        // Optionally, send an error response back to the client
-    }
-}
 
 /* Call back function, will be called when the SIGALRM is raised when the timer expires. */
 void checkJobbList(int signum){
@@ -270,7 +378,7 @@ int main(int argc, char *argv[]){
         }
     }
     // Handle the received message
-    handle_message(buffer, bytes_received, &client_addr, client_addr_len);    
+    handle_message(buffer, bytes_received, &client_addr, client_addr_len, sockfd);    
 
     loopCount++;
     
